@@ -16,6 +16,24 @@ No public daemon. No relay service. No browser terminal pretending to be a produ
 > [!IMPORTANT]
 > CodexHarbor is an unofficial community project. It is not affiliated with, endorsed by, or supported by OpenAI.
 
+## Screenshots
+
+### Connect securely to a remote Codex workspace
+
+![CodexHarbor landing screen](docs/screenshots/landing.png)
+
+### Manage remote threads from one desktop workspace
+
+![CodexHarbor workspace](docs/screenshots/workspace.png)
+
+### Inspect commands and file changes
+
+![CodexHarbor task details](docs/screenshots/task-details.png)
+
+### Review actions before Codex proceeds
+
+![CodexHarbor approval flow](docs/screenshots/approval.png)
+
 ## Why this exists
 
 OpenAI now provides remote-project support over SSH in its official desktop experience. CodexHarbor is the transparent, direct alternative for people who want an MIT-licensed client, explicit SSH profiles, portable Windows builds, and no ChatGPT device relay. It does not pretend to reproduce every official feature.
