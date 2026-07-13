@@ -2,6 +2,13 @@
 
 All notable changes are documented here.
 
+## [0.1.2] - 2026-07-14
+
+### Fixed
+
+- Built renderer assets with relative `./assets/` URLs so packaged Electron apps can load them over `file://`
+- Added a production-build verification step that rejects root-relative renderer asset paths
+
 ## [0.1.1] - 2026-07-13
 
 ### Fixed

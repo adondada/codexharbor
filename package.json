@@ -1,6 +1,6 @@
 {
   "name": "codexharbor",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "An unofficial open-source desktop client for managing Codex App Server sessions on remote SSH hosts.",
   "author": {
     "name": "CodexHarbor contributors",
@@ -27,7 +27,8 @@
     "dist:win": "npm run build && electron-builder --win nsis portable --x64 --publish never",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
     "clean": "rimraf dist dist-electron release",
-    "check": "npm run typecheck && npm run build:renderer && npm run build:electron"
+    "check": "npm run typecheck && npm run build:renderer && npm run verify:renderer && npm run build:electron",
+    "verify:renderer": "node scripts/verify-renderer.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

@@ -1,0 +1,97 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 70202af..d01b3b2 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,13 @@
+ 
+ All notable changes are documented here.
+ 
++## [0.1.2] - 2026-07-14
++
++### Fixed
++
++- Built renderer assets with relative `./assets/` URLs so packaged Electron apps can load them over `file://`
++- Added a production-build verification step that rejects root-relative renderer asset paths
++
+ ## [0.1.1] - 2026-07-13
+ 
+ ### Fixed
+diff --git a/package-lock.json b/package-lock.json
+index a104dbc..f595437 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "codexharbor",
+-  "version": "0.1.1",
++  "version": "0.1.2",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "codexharbor",
+-      "version": "0.1.1",
++      "version": "0.1.2",
+       "license": "MIT",
+       "dependencies": {
+         "@fontsource-variable/inter": "^5.2.8",
+diff --git a/package.json b/package.json
+index b7d61b9..387902f 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "codexharbor",
+-  "version": "0.1.1",
++  "version": "0.1.2",
+   "description": "An unofficial open-source desktop client for managing Codex App Server sessions on remote SSH hosts.",
+   "author": {
+     "name": "CodexHarbor contributors",
+@@ -27,7 +27,8 @@
+     "dist:win": "npm run build && electron-builder --win nsis portable --x64 --publish never",
+     "dist:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
+     "clean": "rimraf dist dist-electron release",
+-    "check": "npm run typecheck && npm run build:renderer && npm run build:electron"
++    "check": "npm run typecheck && npm run build:renderer && npm run verify:renderer && npm run build:electron",
++    "verify:renderer": "node scripts/verify-renderer.mjs"
+   },
+   "dependencies": {
+     "@fontsource-variable/inter": "^5.2.8",
+diff --git a/scripts/verify-renderer.mjs b/scripts/verify-renderer.mjs
+new file mode 100644
+index 0000000..68d2578
+--- /dev/null
++++ b/scripts/verify-renderer.mjs
+@@ -0,0 +1,20 @@
++import { readFile } from 'node:fs/promises';
++import path from 'node:path';
++
++const indexPath = path.resolve('dist/index.html');
++const html = await readFile(indexPath, 'utf8');
++const rootRelativeAsset = /(?:src|href)=["']\/(?!\/)/i.exec(html);
++
++if (rootRelativeAsset) {
++  throw new Error(
++    `Renderer build contains a root-relative asset URL (${rootRelativeAsset[0]}). ` +
++      'Electron production builds load over file:// and require relative asset URLs.',
++  );
++}
++
++const requiredRelativeAsset = /(?:src|href)=["']\.\/assets\//i.test(html);
++if (!requiredRelativeAsset) {
++  throw new Error('Renderer build does not contain the expected ./assets/ URLs.');
++}
++
++console.log('Renderer asset paths are file:// compatible.');
+diff --git a/vite.config.ts b/vite.config.ts
+index f726db5..85845ce 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
+ import react from '@vitejs/plugin-react';
+ 
+ export default defineConfig({
++  base: './',
+   plugins: [react()],
+   server: {
+     host: '127.0.0.1',
