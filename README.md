@@ -7,6 +7,9 @@
     <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8ff0bc" /></a>
     <img alt="Electron" src="https://img.shields.io/badge/Electron-React-9bb7ff" />
   </p>
+  <p>Download the latest Windows installer, portable EXE, AppImage or Debian package from GitHub
+Releases.</p>
+<p>Latest release: https://github.com/adondada/codexharbor/releases/latest</p>
 </div>
 
 CodexHarbor connects to a Linux VPS with SSH, starts `codex app-server --listen stdio://` inside that encrypted channel, and renders the official Codex App Server protocol as a polished desktop client.
