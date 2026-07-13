@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible CodexHarbor problem
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste credentials, private keys, tokens, or unredacted VPS addresses.
+  - type: input
+    id: version
+    attributes:
+      label: CodexHarbor version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: codex
+    attributes:
+      label: Remote Codex version
+      placeholder: Output of codex --version
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Desktop platform
+      options: [Windows 11, Windows 10, Linux, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted diagnostics
+      render: text

@@ -1,0 +1,103 @@
+{
+  "name": "codexharbor",
+  "version": "0.1.0",
+  "description": "An unofficial open-source desktop client for managing Codex App Server sessions on remote SSH hosts.",
+  "author": "CodexHarbor contributors",
+  "license": "MIT",
+  "private": false,
+  "main": "dist-electron/main/main.js",
+  "homepage": "https://github.com/adondada/codexharbor",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adondada/codexharbor.git"
+  },
+  "scripts": {
+    "configure:owner": "node scripts/set-owner.mjs",
+    "dev": "concurrently -k \"vite\" \"npm:dev:electron\"",
+    "demo": "vite --open '/?demo=1'",
+    "dev:electron": "tsup src/main/main.ts src/preload/preload.ts --format cjs --platform node --external electron --external ssh2 --out-dir dist-electron --watch --onSuccess \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "typecheck": "tsc --noEmit",
+    "build:renderer": "vite build",
+    "build:electron": "tsup src/main/main.ts src/preload/preload.ts --format cjs --platform node --external electron --external ssh2 --out-dir dist-electron",
+    "build": "npm run check",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis portable --x64 --publish never",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
+    "clean": "rimraf dist dist-electron release",
+    "check": "npm run typecheck && npm run build:renderer && npm run build:electron"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "lucide-react": "^1.24.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.0.0",
+    "remark-gfm": "^4.0.0",
+    "ssh2": "^1.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "@types/ssh2": "^1.15.4",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vite": "^8.1.4",
+    "wait-on": "^9.0.10"
+  },
+  "build": {
+    "appId": "app.codexharbor.desktop",
+    "productName": "CodexHarbor",
+    "artifactName": "CodexHarbor-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "LICENSE",
+      "README.md",
+      "assets/**/*"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CodexHarbor",
+      "artifactName": "CodexHarbor-Setup-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "synopsis": "Remote Codex App Server desktop client",
+      "icon": "assets/icon.png"
+    },
+    "portable": {
+      "artifactName": "CodexHarbor-Portable-${version}-${arch}.${ext}"
+    }
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  }
+}
