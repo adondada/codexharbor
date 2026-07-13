@@ -179,8 +179,8 @@ export function HostDialog({ open, host, onClose, onSaved }: HostDialogProps) {
           </label>
           <label>
             <span>Default project directory</span>
-            <input value={form.defaultCwd} onChange={(e) => update('defaultCwd', e.target.value)} placeholder="/root/my-project" />
-            <small>This path exists on the VPS, not your PC.</small>
+            <input value={form.defaultCwd} onChange={(e) => update('defaultCwd', e.target.value)} placeholder="/root/my-project" required />
+            <small>This absolute path exists on the VPS, not your PC. It is required for new tasks.</small>
           </label>
           <label className="span-two">
             <span>Expected SSH SHA-256 fingerprint <small>optional</small></span>

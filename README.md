@@ -94,7 +94,7 @@ npm install -g @openai/codex@latest
 ### On your PC
 
 - Windows 10/11 for the `.exe`, or a recent Linux desktop
-- Git and Node.js 22 or newer only when building from source
+- Git, Node.js 24, and npm 10 or newer only when building from source
 
 ## Fastest route to a Windows `.exe`
 
@@ -197,6 +197,32 @@ sudo ln -s "$(command -v codex)" /usr/local/bin/codex
 ```
 
 Do not blindly run that command if `/usr/local/bin/codex` already exists.
+
+
+## Troubleshooting: connected but empty
+
+A green SSH status only proves the encrypted channel and App Server handshake succeeded. It does not prove thread history, model discovery, account state, or the project path loaded correctly. Version 0.1.1 reports each bootstrap stage separately instead of quietly presenting an empty workspace.
+
+1. Open **Remote inspector → Diagnostics**. You should see entries for App Server initialization, model count, and thread count.
+2. Confirm the host profile uses the same Linux user that owns the Codex sessions. A `root` App Server reads `/root/.codex`; another account reads that account's own `~/.codex`.
+3. On the VPS, run:
+
+   ```bash
+   whoami
+   echo "$HOME"
+   codex --version
+   codex resume
+   ```
+
+   If `codex resume` has no history for that user, CodexHarbor cannot manufacture it from the decorative ether.
+4. Set an absolute **Default project directory** in the host profile, for example `/root/invisib`. New tasks are blocked until a project path is selected.
+5. Update Codex when the protocol is old:
+
+   ```bash
+   npm install -g @openai/codex@latest
+   ```
+
+Version 0.1.1 explicitly requests all model providers and every documented thread source, then falls back to the older source list when an older App Server rejects newer source kinds. Model discovery, authentication, rate limits, and thread history now load independently, so one unsupported endpoint no longer blanks the entire client.
 
 ## Security model
 

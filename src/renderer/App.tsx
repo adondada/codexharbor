@@ -47,7 +47,18 @@ import {
   statusLabel,
 } from './lib/codex';
 
-const sourceKinds = ['cli', 'vscode', 'exec', 'appServer'];
+const sourceKinds = [
+  'cli',
+  'vscode',
+  'exec',
+  'appServer',
+  'subAgent',
+  'subAgentReview',
+  'subAgentCompact',
+  'subAgentThreadSpawn',
+  'subAgentOther',
+  'unknown',
+];
 
 type Toast = { id: number; kind: 'error' | 'info'; text: string };
 
@@ -102,6 +113,8 @@ export default function App() {
   const [loadingThread, setLoadingThread] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [bootstrapLoading, setBootstrapLoading] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState('');
 
   const activeThreadIdRef = useRef('');
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -128,19 +141,38 @@ export default function App() {
     setSelectedHostId((current) => current || next[0]?.id || '');
   }, []);
 
-  const refreshThreads = useCallback(async () => {
-    if (connection.state !== 'connected') return;
+  const refreshThreads = useCallback(async (): Promise<ThreadSummary[]> => {
+    if (connection.state !== 'connected') return [];
+
+    const requestHistory = (kinds: string[]) => window.codexBridge.codex.request<{ data: ThreadSummary[] }>('thread/list', {
+      limit: 100,
+      sortKey: 'recency_at',
+      sortDirection: 'desc',
+      modelProviders: [],
+      sourceKinds: kinds,
+      archived: false,
+      useStateDbOnly: false,
+    });
+
     try {
-      const result = await window.codexBridge.codex.request<{ data: ThreadSummary[] }>('thread/list', {
-        limit: 100,
-        sortKey: 'recency_at',
-        sortDirection: 'desc',
-        sourceKinds,
-        archived: false,
-      });
-      setThreads(result.data ?? []);
+      let result: { data: ThreadSummary[] };
+      try {
+        result = await requestHistory(sourceKinds);
+      } catch (modernError: any) {
+        setDiagnostics((current) => [...current.slice(-79), `Full source list rejected; retrying compatibility mode: ${modernError?.message ?? String(modernError)}`]);
+        result = await requestHistory(['cli', 'vscode', 'exec', 'appServer']);
+      }
+      const nextThreads = result.data ?? [];
+      setThreads(nextThreads);
+      setDiagnostics((current) => [...current.slice(-79), `Thread history: ${nextThreads.length} thread(s) returned.`]);
+      setBootstrapError('');
+      return nextThreads;
     } catch (error: any) {
-      notify(error?.message ?? String(error));
+      const message = error?.message ?? String(error);
+      setBootstrapError(`Thread history failed: ${message}`);
+      setDiagnostics((current) => [...current.slice(-79), `Thread history failed: ${message}`]);
+      notify(message);
+      return [];
     }
   }, [connection.state, notify]);
 
@@ -155,24 +187,41 @@ export default function App() {
   }, []);
 
   const loadBootstrap = useCallback(async () => {
-    const [modelResult] = await Promise.all([
-      window.codexBridge.codex.request<{ data: ModelInfo[] }>('model/list', { limit: 100, includeHidden: false }),
-      loadAccount(),
-    ]);
-    const nextModels = modelResult.data ?? [];
-    setModels(nextModels);
-    const preferred = nextModels.find((model) => model.isDefault) ?? nextModels[0];
-    if (preferred) {
-      setSelectedModel(preferred.id ?? preferred.model ?? '');
-      setEffort(preferred.defaultReasoningEffort ?? 'medium');
-    }
-    await refreshThreads();
-    try {
-      const usageResult = await window.codexBridge.codex.request('account/rateLimits/read', {});
-      setUsage(usageResult);
-    } catch {
-      // Older servers may not provide rate limit data. The app remains useful, unlike some product managers.
-    }
+    setBootstrapLoading(true);
+    setBootstrapError('');
+
+    const threadPromise = refreshThreads();
+    const accountPromise = loadAccount();
+    const modelPromise = window.codexBridge.codex
+      .request<{ data: ModelInfo[] }>('model/list', { limit: 100, includeHidden: false })
+      .then((modelResult) => {
+        const nextModels = modelResult.data ?? [];
+        setModels(nextModels);
+        const preferred = nextModels.find((model) => model.isDefault) ?? nextModels[0];
+        if (preferred) {
+          setSelectedModel(preferred.id ?? preferred.model ?? '');
+          setEffort(preferred.defaultReasoningEffort ?? 'medium');
+        }
+        setDiagnostics((current) => [...current.slice(-79), `Models: ${nextModels.length} available.`]);
+      })
+      .catch((error: any) => {
+        const message = error?.message ?? String(error);
+        setModels([]);
+        setSelectedModel('');
+        setDiagnostics((current) => [...current.slice(-79), `Model list failed; server defaults remain usable: ${message}`]);
+      });
+
+    const usagePromise = window.codexBridge.codex
+      .request('account/rateLimits/read', {})
+      .then(setUsage)
+      .catch((error: any) => {
+        setUsage(null);
+        setDiagnostics((current) => [...current.slice(-79), `Rate limits unavailable: ${error?.message ?? String(error)}`]);
+      });
+
+    const [nextThreads] = await Promise.all([threadPromise, accountPromise, modelPromise, usagePromise]);
+    setCwd((current) => current || nextThreads[0]?.cwd || '');
+    setBootstrapLoading(false);
   }, [loadAccount, refreshThreads]);
 
   useEffect(() => {
@@ -191,6 +240,8 @@ export default function App() {
       setRunning(false);
       setPendingRequests([]);
       setAccount(null);
+      setBootstrapLoading(false);
+      setBootstrapError('');
       return;
     }
     const host = hosts.find((entry) => entry.id === connection.hostId);
@@ -198,7 +249,13 @@ export default function App() {
       setSelectedHostId(host.id);
       setCwd(host.defaultCwd ?? '');
     }
-    void loadBootstrap().catch((error: any) => notify(error?.message ?? String(error)));
+    void loadBootstrap().catch((error: any) => {
+      const message = error?.message ?? String(error);
+      setBootstrapLoading(false);
+      setBootstrapError(message);
+      setDiagnostics((current) => [...current.slice(-79), `Bootstrap failed: ${message}`]);
+      notify(message);
+    });
   }, [connection.state, connection.hostId, hosts, loadBootstrap, notify]);
 
   useEffect(() => {
@@ -592,7 +649,7 @@ export default function App() {
 
         <div className="control-bar">
           <label className="path-control"><FolderGit2 size={15} /><input value={cwd} onChange={(event) => setCwd(event.target.value)} placeholder="/absolute/path/on/vps" disabled={running} /></label>
-          <label className="select-control"><Bot size={14} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={running}>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName ?? model.model ?? model.id}</option>)}</select><ChevronDown size={13} /></label>
+          <label className="select-control"><Bot size={14} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={running}><option value="">Server default</option>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName ?? model.model ?? model.id}</option>)}</select><ChevronDown size={13} /></label>
           <label className="select-control"><Gauge size={14} /><select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={running}>{supportedEfforts.map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={13} /></label>
           <label className="select-control"><ShieldCheck size={14} /><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value)} disabled={running}><option value="workspaceWrite">Workspace write</option><option value="readOnly">Read only</option><option value="dangerFullAccess">Full access</option></select><ChevronDown size={13} /></label>
           <label className="select-control"><Play size={14} /><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value)} disabled={running}><option value="onRequest">Ask when needed</option><option value="unlessTrusted">Unless trusted</option><option value="never">Never ask</option></select><ChevronDown size={13} /></label>
@@ -607,15 +664,32 @@ export default function App() {
           </div>
         )}
 
+        {!cwd && !activeThread && !bootstrapLoading && (
+          <div className="setup-banner">
+            <div><FolderGit2 size={18} /><span><strong>No VPS project directory is selected.</strong> Add an absolute path such as <code>/root/invisib</code> above or save it in the host profile.</span></div>
+            <button className="secondary-button compact" onClick={() => { setEditingHost(selectedHost); setHostDialogOpen(true); }}><Settings2 size={14} /> Edit host</button>
+          </div>
+        )}
+
         <div className="conversation" ref={scrollRef}>
-          {loadingThread ? (
+          {bootstrapLoading ? (
+            <div className="center-loader"><RefreshCw className="spin" size={22} /><span>Loading Codex models, account, and thread history…</span></div>
+          ) : loadingThread ? (
             <div className="center-loader"><RefreshCw className="spin" size={22} /><span>Loading remote thread…</span></div>
+          ) : bootstrapError ? (
+            <div className="empty-conversation error-state">
+              <WifiOff size={34} />
+              <span className="eyebrow">CONNECTED, BUT BOOTSTRAP FAILED</span>
+              <h1>SSH works. Codex data does not.</h1>
+              <p>{bootstrapError}</p>
+              <button className="primary-button" onClick={loadBootstrap}><RefreshCw size={15} /> Retry bootstrap</button>
+            </div>
           ) : items.length === 0 && pendingRequests.length === 0 ? (
             <div className="empty-conversation">
               <div className="empty-orbit"><div><Bot size={29} /></div></div>
               <span className="eyebrow">CODEX APP SERVER · {connection.platform?.toUpperCase() ?? 'REMOTE'}</span>
               <h1>{activeThread ? 'This thread has no visible items.' : 'Delegate the work. Keep the control.'}</h1>
-              <p>Describe a concrete task. Codex runs inside <code>{cwd || 'your VPS project'}</code>, streams every meaningful action, and pauses here for approvals.</p>
+              <p>{cwd ? <>Describe a concrete task. Codex runs inside <code>{cwd}</code>, streams every meaningful action, and pauses here for approvals.</> : <>Set an absolute VPS project path above before sending a task. The connection is alive, but Codex cannot guess which repository humanity intended.</>}</p>
               <div className="suggestion-grid">
                 <button onClick={() => setPrompt('Inspect this repository, explain its architecture, and identify the three highest-impact improvements.')}><strong>Understand the repo</strong><span>Architecture, risks, next steps</span></button>
                 <button onClick={() => setPrompt('Run the test suite, diagnose every failure, fix the root causes, and summarize the changes.')}><strong>Fix failing tests</strong><span>Execute, patch, verify</span></button>
@@ -658,12 +732,14 @@ export default function App() {
               <div><dt>Host</dt><dd>{selectedHost?.host}</dd></div>
               <div><dt>User</dt><dd>{selectedHost?.username}</dd></div>
               <div><dt>Runtime</dt><dd>{connection.platform ?? 'remote'}</dd></div>
+              <div><dt>Models</dt><dd>{models.length || 'server default'}</dd></div>
+              <div><dt>Threads</dt><dd>{threads.length}</dd></div>
             </dl>
           </section>
           <section className="inspector-section">
             <h4>Account</h4>
             <dl>
-              <div><dt>Auth</dt><dd>{account?.type ?? 'Not signed in'}</dd></div>
+              <div><dt>Auth</dt><dd>{account?.type ?? (requiresAuth ? 'Sign-in required' : 'Server-managed / not required')}</dd></div>
               <div><dt>Plan</dt><dd>{account?.planType ?? '—'}</dd></div>
               <div><dt>Email</dt><dd className="truncate">{account?.email ?? '—'}</dd></div>
             </dl>

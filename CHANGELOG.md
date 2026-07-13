@@ -2,6 +2,25 @@
 
 All notable changes are documented here.
 
+## [0.1.1] - 2026-07-13
+
+### Fixed
+
+- Added the Debian package maintainer email required by Electron Builder
+- Added Linux desktop metadata so AppImage and `.deb` windows associate correctly
+- Reworked bootstrap so model, account, rate-limit, and thread requests fail independently
+- Added persistent bootstrap errors, retry controls, and useful connection diagnostics
+- Requested all Codex model providers and documented thread source kinds, with an older-server fallback
+- Added an explicit server-default model option and project-directory setup warning
+- Corrected the account label when OpenAI authentication is not required
+
+### Changed
+
+- Moved source builds and GitHub Actions to Node.js 24
+- Updated direct dependencies and TypeScript definitions
+- Updated GitHub Actions to Node 24-era major versions
+- Made the VPS default project directory required for newly saved hosts
+
 ## [0.1.0] - 2026-07-13
 
 ### Added

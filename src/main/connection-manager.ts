@@ -126,6 +126,15 @@ export class ConnectionManager {
 
       const initialized = await rpc.initialize();
       const platform = initialized?.platformOs || initialized?.platformFamily || 'remote';
+      const details = [
+        initialized?.codexHome ? `Codex home: ${initialized.codexHome}` : '',
+        initialized?.userAgent ? `User agent: ${initialized.userAgent}` : '',
+        `Platform: ${platform}`,
+      ].filter(Boolean).join(' · ');
+      this.getWindow()?.webContents.send('codex:event', {
+        method: 'bridge/diagnostic',
+        params: { text: `App Server initialized. ${details}` },
+      });
       this.setStatus({ state: 'connected', hostId: host.id, message: `Connected to ${host.name}`, platform });
       return this.status;
     } catch (error: any) {
