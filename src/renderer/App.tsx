@@ -42,8 +42,11 @@ import {
   type ModelInfo,
   type PendingRequest,
   type ThreadSummary,
+  displayText,
   flattenTurns,
   formatRelativeTime,
+  normalizeCodexItem,
+  normalizeThread,
   statusLabel,
 } from './lib/codex';
 
@@ -62,25 +65,25 @@ const sourceKinds = [
 
 type Toast = { id: number; kind: 'error' | 'info'; text: string };
 
-function upsertItem(items: CodexItem[], next: CodexItem): CodexItem[] {
+function upsertItem(items: CodexItem[], nextValue: CodexItem): CodexItem[] {
+  const next = normalizeCodexItem(nextValue, `item-${items.length}`);
   const index = items.findIndex((item) => item.id === next.id);
   if (index < 0) return [...items, next];
   const copy = [...items];
-  copy[index] = { ...items[index], ...next, streamedOutput: next.streamedOutput ?? items[index].streamedOutput };
+  copy[index] = normalizeCodexItem({ ...items[index], ...next, streamedOutput: next.streamedOutput ?? items[index].streamedOutput }, next.id);
   return copy;
 }
 
-function appendItemDelta(items: CodexItem[], itemId: string, type: string, field: 'text' | 'streamedOutput' | 'summary', delta: string): CodexItem[] {
+function appendItemDelta(items: CodexItem[], itemIdValue: unknown, typeValue: unknown, field: 'text' | 'streamedOutput' | 'summary', deltaValue: unknown): CodexItem[] {
+  const itemId = displayText(itemIdValue, `item-${items.length}`);
+  const type = displayText(typeValue, 'unknown');
+  const delta = displayText(deltaValue);
   const index = items.findIndex((item) => item.id === itemId);
-  if (index < 0) return [...items, { id: itemId, type, [field]: delta, status: 'inProgress' }];
+  if (index < 0) return [...items, normalizeCodexItem({ id: itemId, type, [field]: delta, status: 'inProgress' }, itemId)];
   const copy = [...items];
   const item = copy[index];
-  if (field === 'summary') {
-    const previous = typeof item.summary === 'string' ? item.summary : '';
-    copy[index] = { ...item, summary: previous + delta };
-  } else {
-    copy[index] = { ...item, [field]: String(item[field] ?? '') + delta };
-  }
+  const previous = displayText(item[field]);
+  copy[index] = normalizeCodexItem({ ...item, [field]: previous + delta }, itemId);
   return copy;
 }
 
@@ -129,7 +132,8 @@ export default function App() {
   const selectedModelInfo = useMemo(() => models.find((model) => model.id === selectedModel || model.model === selectedModel), [models, selectedModel]);
   const supportedEfforts = selectedModelInfo?.supportedReasoningEfforts?.map((entry) => entry.reasoningEffort) ?? ['low', 'medium', 'high', 'xhigh'];
 
-  const notify = useCallback((text: string, kind: Toast['kind'] = 'error') => {
+  const notify = useCallback((value: unknown, kind: Toast['kind'] = 'error') => {
+    const text = displayText(value, 'Unknown Codex error');
     const id = toastCounter.current++;
     setToasts((current) => [...current, { id, kind, text }]);
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 5500);
@@ -162,7 +166,7 @@ export default function App() {
         setDiagnostics((current) => [...current.slice(-79), `Full source list rejected; retrying compatibility mode: ${modernError?.message ?? String(modernError)}`]);
         result = await requestHistory(['cli', 'vscode', 'exec', 'appServer']);
       }
-      const nextThreads = result.data ?? [];
+      const nextThreads = (result.data ?? []).map((thread, index) => normalizeThread(thread, `thread-${index}`));
       setThreads(nextThreads);
       setDiagnostics((current) => [...current.slice(-79), `Thread history: ${nextThreads.length} thread(s) returned.`]);
       setBootstrapError('');
@@ -195,7 +199,16 @@ export default function App() {
     const modelPromise = window.codexBridge.codex
       .request<{ data: ModelInfo[] }>('model/list', { limit: 100, includeHidden: false })
       .then((modelResult) => {
-        const nextModels = modelResult.data ?? [];
+        const nextModels = (modelResult.data ?? []).map((model, index) => ({
+          ...model,
+          id: displayText(model.id ?? model.model, `model-${index}`),
+          model: displayText(model.model) || undefined,
+          displayName: displayText(model.displayName) || undefined,
+          defaultReasoningEffort: displayText(model.defaultReasoningEffort) || undefined,
+          supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts)
+            ? model.supportedReasoningEfforts.map((entry) => ({ ...entry, reasoningEffort: displayText(entry?.reasoningEffort, 'medium'), description: displayText(entry?.description) || undefined }))
+            : undefined,
+        }));
         setModels(nextModels);
         const preferred = nextModels.find((model) => model.isDefault) ?? nextModels[0];
         if (preferred) {
@@ -271,7 +284,7 @@ export default function App() {
       }
 
       if (event.method === 'bridge/diagnostic') {
-        setDiagnostics((current) => [...current.slice(-79), params.text ?? JSON.stringify(params)]);
+        setDiagnostics((current) => [...current.slice(-79), displayText(params.text, JSON.stringify(params))]);
         return;
       }
       if (event.method === 'serverRequest/resolved') {
@@ -381,13 +394,13 @@ export default function App() {
     try {
       const read = await window.codexBridge.codex.request<{ thread: ThreadSummary }>('thread/read', { threadId: thread.id, includeTurns: true });
       const resumed = await window.codexBridge.codex.request<{ thread: ThreadSummary }>('thread/resume', { threadId: thread.id });
-      const hydrated = { ...read.thread, ...resumed.thread, turns: resumed.thread.turns?.length ? resumed.thread.turns : read.thread.turns };
+      const hydrated = normalizeThread({ ...read.thread, ...resumed.thread, turns: resumed.thread.turns?.length ? resumed.thread.turns : read.thread.turns }, thread.id);
       activeThreadIdRef.current = hydrated.id;
       setActiveThread(hydrated);
       setItems(flattenTurns(hydrated));
-      setCwd(hydrated.cwd ?? cwd);
-      const state = typeof hydrated.status === 'object' ? hydrated.status?.type : hydrated.status;
-      const activeTurn = [...(hydrated.turns ?? [])].reverse().find((turn) => turn.status === 'inProgress');
+      setCwd(displayText(hydrated.cwd, cwd));
+      const state = statusLabel(hydrated.status);
+      const activeTurn = [...(hydrated.turns ?? [])].reverse().find((turn) => statusLabel(turn.status) === 'inProgress');
       setActiveTurnId(activeTurn?.id ?? '');
       setRunning(state === 'active');
     } catch (error: any) {
@@ -415,12 +428,13 @@ export default function App() {
         sandbox: sandboxMode,
         serviceName: 'codexharbor',
       });
-      activeThreadIdRef.current = result.thread.id;
-      setActiveThread(result.thread);
+      const normalizedThread = normalizeThread(result.thread, 'new-thread');
+      activeThreadIdRef.current = normalizedThread.id;
+      setActiveThread(normalizedThread);
       setItems([]);
       setPendingRequests([]);
       await refreshThreads();
-      return result.thread;
+      return normalizedThread;
     } catch (error: any) {
       notify(error?.message ?? String(error));
       return null;
@@ -620,7 +634,7 @@ export default function App() {
           {filteredThreads.map((thread) => (
             <button key={thread.id} className={`thread-row ${activeThread?.id === thread.id ? 'active' : ''}`} onClick={() => void openThread(thread)}>
               <MessageSquareText size={15} />
-              <div><strong>{thread.name || thread.preview || 'Untitled task'}</strong><span>{thread.cwd || 'Remote workspace'}</span></div>
+              <div><strong>{displayText(thread.name || thread.preview, 'Untitled task')}</strong><span>{displayText(thread.cwd, 'Remote workspace')}</span></div>
               <time>{formatRelativeTime(thread.recencyAt ?? thread.updatedAt ?? thread.createdAt)}</time>
               {statusLabel(thread.status) === 'active' && <i className="thread-running" />}
             </button>
@@ -639,7 +653,7 @@ export default function App() {
           {!sidebarOpen && <button className="icon-button" onClick={() => setSidebarOpen(true)}><Menu size={18} /></button>}
           <div className="workspace-title">
             <span>{activeThread ? 'ACTIVE THREAD' : 'NEW REMOTE TASK'}</span>
-            <h2>{activeThread?.name || activeThread?.preview || (activeThread ? 'Untitled task' : 'What should Codex build?')}</h2>
+            <h2>{displayText(activeThread?.name || activeThread?.preview, activeThread ? 'Untitled task' : 'What should Codex build?')}</h2>
           </div>
           <div className="workspace-actions">
             {activeThread && <button className="secondary-button compact" onClick={archiveThread}><Archive size={15} /> Archive</button>}
@@ -649,8 +663,8 @@ export default function App() {
 
         <div className="control-bar">
           <label className="path-control"><FolderGit2 size={15} /><input value={cwd} onChange={(event) => setCwd(event.target.value)} placeholder="/absolute/path/on/vps" disabled={running} /></label>
-          <label className="select-control"><Bot size={14} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={running}><option value="">Server default</option>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName ?? model.model ?? model.id}</option>)}</select><ChevronDown size={13} /></label>
-          <label className="select-control"><Gauge size={14} /><select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={running}>{supportedEfforts.map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={13} /></label>
+          <label className="select-control"><Bot size={14} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={running}><option value="">Server default</option>{models.map((model) => <option key={model.id} value={model.id}>{displayText(model.displayName ?? model.model ?? model.id, 'Unknown model')}</option>)}</select><ChevronDown size={13} /></label>
+          <label className="select-control"><Gauge size={14} /><select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={running}>{supportedEfforts.map((value) => { const effortValue = displayText(value, 'medium'); return <option key={effortValue} value={effortValue}>{effortValue}</option>; })}</select><ChevronDown size={13} /></label>
           <label className="select-control"><ShieldCheck size={14} /><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value)} disabled={running}><option value="workspaceWrite">Workspace write</option><option value="readOnly">Read only</option><option value="dangerFullAccess">Full access</option></select><ChevronDown size={13} /></label>
           <label className="select-control"><Play size={14} /><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value)} disabled={running}><option value="onRequest">Ask when needed</option><option value="unlessTrusted">Unless trusted</option><option value="never">Never ask</option></select><ChevronDown size={13} /></label>
         </div>
@@ -729,9 +743,9 @@ export default function App() {
             <h4>Connection</h4>
             <dl>
               <div><dt>Status</dt><dd className="online-text"><Wifi size={13} /> Connected</dd></div>
-              <div><dt>Host</dt><dd>{selectedHost?.host}</dd></div>
-              <div><dt>User</dt><dd>{selectedHost?.username}</dd></div>
-              <div><dt>Runtime</dt><dd>{connection.platform ?? 'remote'}</dd></div>
+              <div><dt>Host</dt><dd>{displayText(selectedHost?.host, '—')}</dd></div>
+              <div><dt>User</dt><dd>{displayText(selectedHost?.username, '—')}</dd></div>
+              <div><dt>Runtime</dt><dd>{displayText(connection.platform, 'remote')}</dd></div>
               <div><dt>Models</dt><dd>{models.length || 'server default'}</dd></div>
               <div><dt>Threads</dt><dd>{threads.length}</dd></div>
             </dl>
@@ -739,9 +753,9 @@ export default function App() {
           <section className="inspector-section">
             <h4>Account</h4>
             <dl>
-              <div><dt>Auth</dt><dd>{account?.type ?? (requiresAuth ? 'Sign-in required' : 'Server-managed / not required')}</dd></div>
-              <div><dt>Plan</dt><dd>{account?.planType ?? '—'}</dd></div>
-              <div><dt>Email</dt><dd className="truncate">{account?.email ?? '—'}</dd></div>
+              <div><dt>Auth</dt><dd>{displayText(account?.type, requiresAuth ? 'Sign-in required' : 'Server-managed / not required')}</dd></div>
+              <div><dt>Plan</dt><dd>{displayText(account?.planType, '—')}</dd></div>
+              <div><dt>Email</dt><dd className="truncate">{displayText(account?.email, '—')}</dd></div>
             </dl>
           </section>
           <section className="inspector-section">
@@ -756,7 +770,7 @@ export default function App() {
           {usage && <section className="inspector-section"><h4>Rate limits</h4><pre className="usage-json">{JSON.stringify(usage, null, 2)}</pre></section>}
           <section className="inspector-section diagnostics-section">
             <div className="section-heading"><h4>Diagnostics</h4><button className="mini-icon" onClick={() => setDiagnostics([])}><Trash2 size={13} /></button></div>
-            {diagnostics.length ? diagnostics.slice(-20).map((line, index) => <code key={`${index}-${line.slice(0, 10)}`}>{line}</code>) : <p>No diagnostics. Suspiciously civilized.</p>}
+            {diagnostics.length ? diagnostics.slice(-20).map((line, index) => { const safeLine = displayText(line, 'Unknown diagnostic'); return <code key={`${index}-${safeLine.slice(0, 10)}`}>{safeLine}</code>; }) : <p>No diagnostics. Suspiciously civilized.</p>}
           </section>
         </aside>
       )}

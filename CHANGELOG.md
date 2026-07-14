@@ -2,6 +2,16 @@
 
 All notable changes are documented here.
 
+## [0.1.3] - 2026-07-14
+
+### Fixed
+
+- Normalized historical Codex thread, turn, and item schemas before rendering
+- Prevented structured protocol objects from being passed directly to React as children
+- Added render-safe handling for old messages, commands, file changes, approvals, models, diagnostics, and account fields
+- Added a top-level error boundary so one malformed thread cannot blank the entire application
+- Added a legacy-schema demo fixture for regression testing
+
 ## [0.1.2] - 2026-07-14
 
 ### Fixed

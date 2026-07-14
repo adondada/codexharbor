@@ -76,6 +76,49 @@ const demoThread = {
   ],
 };
 
+
+
+const legacyDemoThread = {
+  id: 'thr_demo_legacy',
+  sessionId: 'thr_demo_legacy',
+  name: { type: 'Legacy thread title' },
+  preview: { type: 'Historical Codex thread using structured fields' },
+  cwd: '/srv/legacy-demo',
+  createdAt: now - 90_000,
+  updatedAt: now - 60,
+  recencyAt: now - 60,
+  status: { type: 'idle' },
+  turns: [
+    {
+      id: 'turn_legacy_1',
+      status: { type: 'completed' },
+      items: [
+        {
+          id: 'legacy_user',
+          type: 'userMessage',
+          content: [{ type: 'inputText', text: { type: 'Inspect the historical project format.' } }],
+          status: { type: 'completed' },
+        },
+        {
+          id: 'legacy_agent',
+          type: 'agentMessage',
+          text: { type: 'This old thread now renders without crashing the application.' },
+          status: { type: 'completed' },
+        },
+        {
+          id: 'legacy_command',
+          type: 'commandExecution',
+          command: [{ type: 'npm' }, { type: 'test' }],
+          cwd: { type: '/srv/legacy-demo' },
+          aggregatedOutput: { type: 'Legacy command output' },
+          status: { type: 'completed' },
+          exitCode: 0,
+        },
+      ],
+    },
+  ],
+};
+
 const demoThreads = [
   demoThread,
   {
@@ -101,8 +144,11 @@ const demoThreads = [
 ];
 
 export function installDemoBridge(): void {
-  if (!new URLSearchParams(window.location.search).has('demo') || window.codexBridge) return;
+  const search = new URLSearchParams(window.location.search);
+  if (!search.has('demo') || window.codexBridge) return;
 
+  const legacyMode = search.get('demo') === 'legacy';
+  const visibleThreads = legacyMode ? [legacyDemoThread, ...demoThreads] : demoThreads;
   (window as any).__CODEXHARBOR_DEMO__ = true;
   let status: ConnectionStatus = { state: 'connected', hostId: demoHost.id, message: 'Connected to demo host', platform: 'linux' };
   const statusListeners = new Set<(value: ConnectionStatus) => void>();
@@ -134,8 +180,11 @@ export function installDemoBridge(): void {
         }
         if (method === 'account/read') return { account: { type: 'chatgpt', email: 'dev@example.com', planType: 'pro' }, requiresOpenaiAuth: false } as T;
         if (method === 'account/rateLimits/read') return { rateLimits: { primary: { usedPercent: 18, windowDurationMins: 300, resetsAt: now + 9200 } } } as T;
-        if (method === 'thread/list') return { data: demoThreads } as T;
-        if (method === 'thread/read' || method === 'thread/resume') return { thread: params?.threadId === demoThread.id ? demoThread : demoThreads[1] } as T;
+        if (method === 'thread/list') return { data: visibleThreads } as T;
+        if (method === 'thread/read' || method === 'thread/resume') {
+          const match = visibleThreads.find((thread) => thread.id === params?.threadId) ?? visibleThreads[0];
+          return { thread: match } as T;
+        }
         if (method === 'thread/start') return { thread: { ...demoThread, id: 'thr_new', name: null, turns: [] } } as T;
         if (method === 'turn/start') return { turn: { id: 'turn_new', status: 'inProgress', items: [] } } as T;
         return {} as T;

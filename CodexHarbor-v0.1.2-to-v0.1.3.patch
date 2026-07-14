@@ -1,0 +1,918 @@
+diff --git a/.gitignore b/.gitignore
+index 97d445b..3ee7389 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -19,3 +19,5 @@ Thumbs.db
+ *.p12
+ *.pfx
+ coverage/
++
++.verification/
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index d01b3b2..19c0cca 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,16 @@
+ 
+ All notable changes are documented here.
+ 
++## [0.1.3] - 2026-07-14
++
++### Fixed
++
++- Normalized historical Codex thread, turn, and item schemas before rendering
++- Prevented structured protocol objects from being passed directly to React as children
++- Added render-safe handling for old messages, commands, file changes, approvals, models, diagnostics, and account fields
++- Added a top-level error boundary so one malformed thread cannot blank the entire application
++- Added a legacy-schema demo fixture for regression testing
++
+ ## [0.1.2] - 2026-07-14
+ 
+ ### Fixed
+diff --git a/package-lock.json b/package-lock.json
+index f595437..38ddcd6 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "codexharbor",
+-  "version": "0.1.2",
++  "version": "0.1.3",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "codexharbor",
+-      "version": "0.1.2",
++      "version": "0.1.3",
+       "license": "MIT",
+       "dependencies": {
+         "@fontsource-variable/inter": "^5.2.8",
+diff --git a/package.json b/package.json
+index 387902f..4a61d11 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "codexharbor",
+-  "version": "0.1.2",
++  "version": "0.1.3",
+   "description": "An unofficial open-source desktop client for managing Codex App Server sessions on remote SSH hosts.",
+   "author": {
+     "name": "CodexHarbor contributors",
+@@ -27,8 +27,9 @@
+     "dist:win": "npm run build && electron-builder --win nsis portable --x64 --publish never",
+     "dist:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
+     "clean": "rimraf dist dist-electron release",
+-    "check": "npm run typecheck && npm run build:renderer && npm run verify:renderer && npm run build:electron",
+-    "verify:renderer": "node scripts/verify-renderer.mjs"
++    "check": "npm run typecheck && npm run build:renderer && npm run verify:renderer && npm run verify:legacy-thread && npm run build:electron",
++    "verify:renderer": "node scripts/verify-renderer.mjs",
++    "verify:legacy-thread": "rimraf .verification && tsup scripts/verify-legacy-thread.tsx --format cjs --platform node --out-dir .verification --silent && node .verification/verify-legacy-thread.js && rimraf .verification"
+   },
+   "dependencies": {
+     "@fontsource-variable/inter": "^5.2.8",
+diff --git a/scripts/verify-legacy-thread.tsx b/scripts/verify-legacy-thread.tsx
+new file mode 100644
+index 0000000..161bb52
+--- /dev/null
++++ b/scripts/verify-legacy-thread.tsx
+@@ -0,0 +1,49 @@
++import React from 'react';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { CodexItemView } from '../src/renderer/components/CodexItemView';
++import { flattenTurns, normalizeThread } from '../src/renderer/lib/codex';
++
++const legacyThread = normalizeThread({
++  id: 'legacy-thread',
++  name: { type: 'Legacy thread title' },
++  status: { type: 'idle' },
++  turns: [
++    {
++      id: 'legacy-turn',
++      status: { type: 'completed' },
++      items: [
++        {
++          id: 'legacy-user',
++          type: 'userMessage',
++          content: [{ type: 'inputText', text: { type: 'Legacy user message' } }],
++          status: { type: 'completed' },
++        },
++        {
++          id: 'legacy-agent',
++          type: 'agentMessage',
++          text: { type: 'Legacy agent message' },
++          status: { type: 'completed' },
++        },
++        {
++          id: 'legacy-command',
++          type: 'commandExecution',
++          command: [{ type: 'npm' }, { type: 'test' }],
++          aggregatedOutput: { type: 'PASS' },
++          cwd: { type: '/srv/legacy' },
++          status: { type: 'completed' },
++          exitCode: 0,
++        },
++      ],
++    },
++  ],
++});
++
++const markup = renderToStaticMarkup(
++  <>{flattenTurns(legacyThread).map((item) => <CodexItemView key={item.id} item={item} />)}</>,
++);
++
++for (const expected of ['Legacy user message', 'Legacy agent message', 'npm test']) {
++  if (!markup.includes(expected)) throw new Error(`Legacy render did not contain: ${expected}`);
++}
++
++console.log('Historical thread schema renders safely.');
+diff --git a/src/renderer/App.tsx b/src/renderer/App.tsx
+index 3abeb7b..a81bb54 100644
+--- a/src/renderer/App.tsx
++++ b/src/renderer/App.tsx
+@@ -42,8 +42,11 @@ import {
+   type ModelInfo,
+   type PendingRequest,
+   type ThreadSummary,
++  displayText,
+   flattenTurns,
+   formatRelativeTime,
++  normalizeCodexItem,
++  normalizeThread,
+   statusLabel,
+ } from './lib/codex';
+ 
+@@ -62,25 +65,25 @@ const sourceKinds = [
+ 
+ type Toast = { id: number; kind: 'error' | 'info'; text: string };
+ 
+-function upsertItem(items: CodexItem[], next: CodexItem): CodexItem[] {
++function upsertItem(items: CodexItem[], nextValue: CodexItem): CodexItem[] {
++  const next = normalizeCodexItem(nextValue, `item-${items.length}`);
+   const index = items.findIndex((item) => item.id === next.id);
+   if (index < 0) return [...items, next];
+   const copy = [...items];
+-  copy[index] = { ...items[index], ...next, streamedOutput: next.streamedOutput ?? items[index].streamedOutput };
++  copy[index] = normalizeCodexItem({ ...items[index], ...next, streamedOutput: next.streamedOutput ?? items[index].streamedOutput }, next.id);
+   return copy;
+ }
+ 
+-function appendItemDelta(items: CodexItem[], itemId: string, type: string, field: 'text' | 'streamedOutput' | 'summary', delta: string): CodexItem[] {
++function appendItemDelta(items: CodexItem[], itemIdValue: unknown, typeValue: unknown, field: 'text' | 'streamedOutput' | 'summary', deltaValue: unknown): CodexItem[] {
++  const itemId = displayText(itemIdValue, `item-${items.length}`);
++  const type = displayText(typeValue, 'unknown');
++  const delta = displayText(deltaValue);
+   const index = items.findIndex((item) => item.id === itemId);
+-  if (index < 0) return [...items, { id: itemId, type, [field]: delta, status: 'inProgress' }];
++  if (index < 0) return [...items, normalizeCodexItem({ id: itemId, type, [field]: delta, status: 'inProgress' }, itemId)];
+   const copy = [...items];
+   const item = copy[index];
+-  if (field === 'summary') {
+-    const previous = typeof item.summary === 'string' ? item.summary : '';
+-    copy[index] = { ...item, summary: previous + delta };
+-  } else {
+-    copy[index] = { ...item, [field]: String(item[field] ?? '') + delta };
+-  }
++  const previous = displayText(item[field]);
++  copy[index] = normalizeCodexItem({ ...item, [field]: previous + delta }, itemId);
+   return copy;
+ }
+ 
+@@ -129,7 +132,8 @@ export default function App() {
+   const selectedModelInfo = useMemo(() => models.find((model) => model.id === selectedModel || model.model === selectedModel), [models, selectedModel]);
+   const supportedEfforts = selectedModelInfo?.supportedReasoningEfforts?.map((entry) => entry.reasoningEffort) ?? ['low', 'medium', 'high', 'xhigh'];
+ 
+-  const notify = useCallback((text: string, kind: Toast['kind'] = 'error') => {
++  const notify = useCallback((value: unknown, kind: Toast['kind'] = 'error') => {
++    const text = displayText(value, 'Unknown Codex error');
+     const id = toastCounter.current++;
+     setToasts((current) => [...current, { id, kind, text }]);
+     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 5500);
+@@ -162,7 +166,7 @@ export default function App() {
+         setDiagnostics((current) => [...current.slice(-79), `Full source list rejected; retrying compatibility mode: ${modernError?.message ?? String(modernError)}`]);
+         result = await requestHistory(['cli', 'vscode', 'exec', 'appServer']);
+       }
+-      const nextThreads = result.data ?? [];
++      const nextThreads = (result.data ?? []).map((thread, index) => normalizeThread(thread, `thread-${index}`));
+       setThreads(nextThreads);
+       setDiagnostics((current) => [...current.slice(-79), `Thread history: ${nextThreads.length} thread(s) returned.`]);
+       setBootstrapError('');
+@@ -195,7 +199,16 @@ export default function App() {
+     const modelPromise = window.codexBridge.codex
+       .request<{ data: ModelInfo[] }>('model/list', { limit: 100, includeHidden: false })
+       .then((modelResult) => {
+-        const nextModels = modelResult.data ?? [];
++        const nextModels = (modelResult.data ?? []).map((model, index) => ({
++          ...model,
++          id: displayText(model.id ?? model.model, `model-${index}`),
++          model: displayText(model.model) || undefined,
++          displayName: displayText(model.displayName) || undefined,
++          defaultReasoningEffort: displayText(model.defaultReasoningEffort) || undefined,
++          supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts)
++            ? model.supportedReasoningEfforts.map((entry) => ({ ...entry, reasoningEffort: displayText(entry?.reasoningEffort, 'medium'), description: displayText(entry?.description) || undefined }))
++            : undefined,
++        }));
+         setModels(nextModels);
+         const preferred = nextModels.find((model) => model.isDefault) ?? nextModels[0];
+         if (preferred) {
+@@ -271,7 +284,7 @@ export default function App() {
+       }
+ 
+       if (event.method === 'bridge/diagnostic') {
+-        setDiagnostics((current) => [...current.slice(-79), params.text ?? JSON.stringify(params)]);
++        setDiagnostics((current) => [...current.slice(-79), displayText(params.text, JSON.stringify(params))]);
+         return;
+       }
+       if (event.method === 'serverRequest/resolved') {
+@@ -381,13 +394,13 @@ export default function App() {
+     try {
+       const read = await window.codexBridge.codex.request<{ thread: ThreadSummary }>('thread/read', { threadId: thread.id, includeTurns: true });
+       const resumed = await window.codexBridge.codex.request<{ thread: ThreadSummary }>('thread/resume', { threadId: thread.id });
+-      const hydrated = { ...read.thread, ...resumed.thread, turns: resumed.thread.turns?.length ? resumed.thread.turns : read.thread.turns };
++      const hydrated = normalizeThread({ ...read.thread, ...resumed.thread, turns: resumed.thread.turns?.length ? resumed.thread.turns : read.thread.turns }, thread.id);
+       activeThreadIdRef.current = hydrated.id;
+       setActiveThread(hydrated);
+       setItems(flattenTurns(hydrated));
+-      setCwd(hydrated.cwd ?? cwd);
+-      const state = typeof hydrated.status === 'object' ? hydrated.status?.type : hydrated.status;
+-      const activeTurn = [...(hydrated.turns ?? [])].reverse().find((turn) => turn.status === 'inProgress');
++      setCwd(displayText(hydrated.cwd, cwd));
++      const state = statusLabel(hydrated.status);
++      const activeTurn = [...(hydrated.turns ?? [])].reverse().find((turn) => statusLabel(turn.status) === 'inProgress');
+       setActiveTurnId(activeTurn?.id ?? '');
+       setRunning(state === 'active');
+     } catch (error: any) {
+@@ -415,12 +428,13 @@ export default function App() {
+         sandbox: sandboxMode,
+         serviceName: 'codexharbor',
+       });
+-      activeThreadIdRef.current = result.thread.id;
+-      setActiveThread(result.thread);
++      const normalizedThread = normalizeThread(result.thread, 'new-thread');
++      activeThreadIdRef.current = normalizedThread.id;
++      setActiveThread(normalizedThread);
+       setItems([]);
+       setPendingRequests([]);
+       await refreshThreads();
+-      return result.thread;
++      return normalizedThread;
+     } catch (error: any) {
+       notify(error?.message ?? String(error));
+       return null;
+@@ -620,7 +634,7 @@ export default function App() {
+           {filteredThreads.map((thread) => (
+             <button key={thread.id} className={`thread-row ${activeThread?.id === thread.id ? 'active' : ''}`} onClick={() => void openThread(thread)}>
+               <MessageSquareText size={15} />
+-              <div><strong>{thread.name || thread.preview || 'Untitled task'}</strong><span>{thread.cwd || 'Remote workspace'}</span></div>
++              <div><strong>{displayText(thread.name || thread.preview, 'Untitled task')}</strong><span>{displayText(thread.cwd, 'Remote workspace')}</span></div>
+               <time>{formatRelativeTime(thread.recencyAt ?? thread.updatedAt ?? thread.createdAt)}</time>
+               {statusLabel(thread.status) === 'active' && <i className="thread-running" />}
+             </button>
+@@ -639,7 +653,7 @@ export default function App() {
+           {!sidebarOpen && <button className="icon-button" onClick={() => setSidebarOpen(true)}><Menu size={18} /></button>}
+           <div className="workspace-title">
+             <span>{activeThread ? 'ACTIVE THREAD' : 'NEW REMOTE TASK'}</span>
+-            <h2>{activeThread?.name || activeThread?.preview || (activeThread ? 'Untitled task' : 'What should Codex build?')}</h2>
++            <h2>{displayText(activeThread?.name || activeThread?.preview, activeThread ? 'Untitled task' : 'What should Codex build?')}</h2>
+           </div>
+           <div className="workspace-actions">
+             {activeThread && <button className="secondary-button compact" onClick={archiveThread}><Archive size={15} /> Archive</button>}
+@@ -649,8 +663,8 @@ export default function App() {
+ 
+         <div className="control-bar">
+           <label className="path-control"><FolderGit2 size={15} /><input value={cwd} onChange={(event) => setCwd(event.target.value)} placeholder="/absolute/path/on/vps" disabled={running} /></label>
+-          <label className="select-control"><Bot size={14} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={running}><option value="">Server default</option>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName ?? model.model ?? model.id}</option>)}</select><ChevronDown size={13} /></label>
+-          <label className="select-control"><Gauge size={14} /><select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={running}>{supportedEfforts.map((value) => <option key={value} value={value}>{value}</option>)}</select><ChevronDown size={13} /></label>
++          <label className="select-control"><Bot size={14} /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={running}><option value="">Server default</option>{models.map((model) => <option key={model.id} value={model.id}>{displayText(model.displayName ?? model.model ?? model.id, 'Unknown model')}</option>)}</select><ChevronDown size={13} /></label>
++          <label className="select-control"><Gauge size={14} /><select value={effort} onChange={(event) => setEffort(event.target.value)} disabled={running}>{supportedEfforts.map((value) => { const effortValue = displayText(value, 'medium'); return <option key={effortValue} value={effortValue}>{effortValue}</option>; })}</select><ChevronDown size={13} /></label>
+           <label className="select-control"><ShieldCheck size={14} /><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value)} disabled={running}><option value="workspaceWrite">Workspace write</option><option value="readOnly">Read only</option><option value="dangerFullAccess">Full access</option></select><ChevronDown size={13} /></label>
+           <label className="select-control"><Play size={14} /><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value)} disabled={running}><option value="onRequest">Ask when needed</option><option value="unlessTrusted">Unless trusted</option><option value="never">Never ask</option></select><ChevronDown size={13} /></label>
+         </div>
+@@ -729,9 +743,9 @@ export default function App() {
+             <h4>Connection</h4>
+             <dl>
+               <div><dt>Status</dt><dd className="online-text"><Wifi size={13} /> Connected</dd></div>
+-              <div><dt>Host</dt><dd>{selectedHost?.host}</dd></div>
+-              <div><dt>User</dt><dd>{selectedHost?.username}</dd></div>
+-              <div><dt>Runtime</dt><dd>{connection.platform ?? 'remote'}</dd></div>
++              <div><dt>Host</dt><dd>{displayText(selectedHost?.host, '—')}</dd></div>
++              <div><dt>User</dt><dd>{displayText(selectedHost?.username, '—')}</dd></div>
++              <div><dt>Runtime</dt><dd>{displayText(connection.platform, 'remote')}</dd></div>
+               <div><dt>Models</dt><dd>{models.length || 'server default'}</dd></div>
+               <div><dt>Threads</dt><dd>{threads.length}</dd></div>
+             </dl>
+@@ -739,9 +753,9 @@ export default function App() {
+           <section className="inspector-section">
+             <h4>Account</h4>
+             <dl>
+-              <div><dt>Auth</dt><dd>{account?.type ?? (requiresAuth ? 'Sign-in required' : 'Server-managed / not required')}</dd></div>
+-              <div><dt>Plan</dt><dd>{account?.planType ?? '—'}</dd></div>
+-              <div><dt>Email</dt><dd className="truncate">{account?.email ?? '—'}</dd></div>
++              <div><dt>Auth</dt><dd>{displayText(account?.type, requiresAuth ? 'Sign-in required' : 'Server-managed / not required')}</dd></div>
++              <div><dt>Plan</dt><dd>{displayText(account?.planType, '—')}</dd></div>
++              <div><dt>Email</dt><dd className="truncate">{displayText(account?.email, '—')}</dd></div>
+             </dl>
+           </section>
+           <section className="inspector-section">
+@@ -756,7 +770,7 @@ export default function App() {
+           {usage && <section className="inspector-section"><h4>Rate limits</h4><pre className="usage-json">{JSON.stringify(usage, null, 2)}</pre></section>}
+           <section className="inspector-section diagnostics-section">
+             <div className="section-heading"><h4>Diagnostics</h4><button className="mini-icon" onClick={() => setDiagnostics([])}><Trash2 size={13} /></button></div>
+-            {diagnostics.length ? diagnostics.slice(-20).map((line, index) => <code key={`${index}-${line.slice(0, 10)}`}>{line}</code>) : <p>No diagnostics. Suspiciously civilized.</p>}
++            {diagnostics.length ? diagnostics.slice(-20).map((line, index) => { const safeLine = displayText(line, 'Unknown diagnostic'); return <code key={`${index}-${safeLine.slice(0, 10)}`}>{safeLine}</code>; }) : <p>No diagnostics. Suspiciously civilized.</p>}
+           </section>
+         </aside>
+       )}
+diff --git a/src/renderer/components/AppErrorBoundary.tsx b/src/renderer/components/AppErrorBoundary.tsx
+new file mode 100644
+index 0000000..43223eb
+--- /dev/null
++++ b/src/renderer/components/AppErrorBoundary.tsx
+@@ -0,0 +1,37 @@
++import { Component, type ErrorInfo, type ReactNode } from 'react';
++import { AlertTriangle, RefreshCw } from 'lucide-react';
++
++interface Props {
++  children: ReactNode;
++}
++
++interface State {
++  error: Error | null;
++}
++
++export class AppErrorBoundary extends Component<Props, State> {
++  state: State = { error: null };
++
++  static getDerivedStateFromError(error: Error): State {
++    return { error };
++  }
++
++  componentDidCatch(error: Error, info: ErrorInfo): void {
++    console.error('CodexHarbor renderer recovered from a fatal render error.', error, info);
++  }
++
++  render(): ReactNode {
++    if (!this.state.error) return this.props.children;
++
++    return (
++      <main className="fatal-render-error">
++        <AlertTriangle size={34} />
++        <span className="eyebrow">THREAD COULD NOT BE RENDERED</span>
++        <h1>Codex returned data this client did not understand.</h1>
++        <p>The window stayed alive and the raw error is shown below. Reload after updating CodexHarbor, or return to the thread list.</p>
++        <pre>{this.state.error.message || String(this.state.error)}</pre>
++        <button className="primary-button" onClick={() => window.location.reload()}><RefreshCw size={15} /> Reload CodexHarbor</button>
++      </main>
++    );
++  }
++}
+diff --git a/src/renderer/components/ApprovalCard.tsx b/src/renderer/components/ApprovalCard.tsx
+index 8947128..8481ba9 100644
+--- a/src/renderer/components/ApprovalCard.tsx
++++ b/src/renderer/components/ApprovalCard.tsx
+@@ -1,7 +1,7 @@
+ import { useMemo, useState } from 'react';
+ import { AlertTriangle, Check, CheckCheck, ExternalLink, FilePenLine, ShieldAlert, TerminalSquare, X } from 'lucide-react';
+ import type { PendingRequest } from '../lib/codex';
+-import { commandText } from '../lib/codex';
++import { commandText, displayText } from '../lib/codex';
+ 
+ interface ApprovalCardProps {
+   request: PendingRequest;
+@@ -86,15 +86,15 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
+     const network = params.networkApprovalContext;
+     return (
+       <>
+-        {params.reason && <p className="approval-reason">{params.reason}</p>}
++        {displayText(params.reason) && <p className="approval-reason">{displayText(params.reason)}</p>}
+         {network ? (
+           <div className="approval-command">
+-            <span className="mono">{network.protocol ?? 'network'}://{network.host ?? 'unknown host'}{network.port ? `:${network.port}` : ''}</span>
++            <span className="mono">{displayText(network.protocol, 'network')}://{displayText(network.host, 'unknown host')}{network.port ? `:${displayText(network.port)}` : ''}</span>
+           </div>
+         ) : (
+           <div className="approval-command">
+             <code>{commandText(params.command)}</code>
+-            {params.cwd && <span>{params.cwd}</span>}
++            {displayText(params.cwd) && <span>{displayText(params.cwd)}</span>}
+           </div>
+         )}
+         <div className="approval-actions">
+@@ -109,8 +109,8 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
+ 
+   const renderFile = () => (
+     <>
+-      {params.reason && <p className="approval-reason">{params.reason}</p>}
+-      {params.grantRoot && <div className="approval-command"><span>Requested write root</span><code>{params.grantRoot}</code></div>}
++      {displayText(params.reason) && <p className="approval-reason">{displayText(params.reason)}</p>}
++      {displayText(params.grantRoot) && <div className="approval-command"><span>Requested write root</span><code>{displayText(params.grantRoot)}</code></div>}
+       <div className="approval-actions">
+         {decisionButton('decline', 'Decline', 'danger-ghost')}
+         {decisionButton('cancel', 'Cancel turn', 'danger-ghost')}
+@@ -128,8 +128,8 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
+           const options = Array.isArray(question.options) ? question.options : [];
+           return (
+             <div className="question" key={id}>
+-              {question.header && <span className="question-header">{question.header}</span>}
+-              <strong>{question.question ?? question.prompt ?? `Question ${index + 1}`}</strong>
++              {displayText(question.header) && <span className="question-header">{displayText(question.header)}</span>}
++              <strong>{displayText(question.question ?? question.prompt, `Question ${index + 1}`)}</strong>
+               {options.length > 0 ? (
+                 <div className="question-options">
+                   {options.map((option: any) => {
+@@ -137,7 +137,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
+                     return (
+                       <label key={label} className={answers[id] === label ? 'selected' : ''}>
+                         <input type="radio" name={`q-${id}`} checked={answers[id] === label} onChange={() => setAnswers((current) => ({ ...current, [id]: label }))} />
+-                        <span><b>{label}</b>{option.description && <small>{option.description}</small>}</span>
++                        <span><b>{label}</b>{displayText(option.description) && <small>{displayText(option.description)}</small>}</span>
+                       </label>
+                     );
+                   })}
+@@ -168,7 +168,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
+ 
+   const renderPermissions = () => (
+     <>
+-      {params.reason && <p className="approval-reason">{params.reason}</p>}
++      {displayText(params.reason) && <p className="approval-reason">{displayText(params.reason)}</p>}
+       <pre className="json-preview">{JSON.stringify(params.permissions ?? {}, null, 2)}</pre>
+       <div className="approval-actions">
+         <button disabled={busy} className="danger-ghost" onClick={() => resolve({ permissions: {} })}><X size={15} /> Deny</button>
+@@ -192,7 +192,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
+     if (params.mode === 'url' && params.url) {
+       return (
+         <>
+-          <p className="approval-reason">{params.message ?? 'Open the connector authorization page.'}</p>
++          <p className="approval-reason">{displayText(params.message, 'Open the connector authorization page.')}</p>
+           <button className="secondary-button" onClick={() => window.codexBridge.system.openExternal(params.url)}><ExternalLink size={15} /> Open page</button>
+           <div className="approval-actions">
+             <button disabled={busy} className="danger-ghost" onClick={() => resolve({ action: 'decline', content: null })}>Decline</button>
+@@ -203,7 +203,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
+     }
+     return (
+       <>
+-        <p className="approval-reason">{params.message ?? 'The connector is requesting structured input.'}</p>
++        <p className="approval-reason">{displayText(params.message, 'The connector is requesting structured input.')}</p>
+         <details className="schema-details">
+           <summary>Requested JSON schema</summary>
+           <pre className="json-preview">{JSON.stringify(params.requestedSchema ?? {}, null, 2)}</pre>
+diff --git a/src/renderer/components/CodexItemView.tsx b/src/renderer/components/CodexItemView.tsx
+index 8ceb65a..17f3f6e 100644
+--- a/src/renderer/components/CodexItemView.tsx
++++ b/src/renderer/components/CodexItemView.tsx
+@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
+ import remarkGfm from 'remark-gfm';
+ import { Bot, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleEllipsis, FileDiff, GitPullRequest, Globe2, Image, Search, TerminalSquare, UserRound, XCircle } from 'lucide-react';
+ import type { CodexItem } from '../lib/codex';
+-import { commandText, itemPrimaryText } from '../lib/codex';
++import { commandText, displayText, itemPrimaryText } from '../lib/codex';
+ 
+ function StatusIcon({ status }: { status?: string }) {
+   if (status === 'failed' || status === 'declined') return <XCircle size={14} />;
+@@ -71,7 +71,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
+   }
+ 
+   if (item.type === 'commandExecution') {
+-    const output = item.aggregatedOutput ?? item.streamedOutput ?? item.output ?? '';
++    const output = displayText(item.aggregatedOutput ?? item.streamedOutput ?? item.output);
+     return (
+       <div className={`activity-card command-card status-${item.status ?? 'running'}`}>
+         <button className="activity-header" onClick={() => setExpanded(!expanded)}>
+@@ -84,7 +84,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
+         </button>
+         {expanded && (
+           <div className="activity-body">
+-            {item.cwd && <div className="cwd-line">in {item.cwd}</div>}
++            {displayText(item.cwd) && <div className="cwd-line">in {displayText(item.cwd)}</div>}
+             <pre>{output || (item.status === 'inProgress' ? 'Running…' : 'No output')}</pre>
+           </div>
+         )}
+@@ -104,8 +104,8 @@ export function CodexItemView({ item }: { item: CodexItem }) {
+           <div className="activity-body change-list">
+             {(item.changes ?? []).map((change, index) => (
+               <details key={`${change.path}-${index}`} open={item.changes?.length === 1}>
+-                <summary><span className={`change-kind ${change.kind ?? 'edit'}`}>{change.kind ?? 'edit'}</span><code>{change.path ?? 'unknown file'}</code></summary>
+-                {change.diff && <pre className="diff-output">{change.diff}</pre>}
++                <summary><span className={`change-kind ${displayText(change.kind, 'edit')}`}>{displayText(change.kind, 'edit')}</span><code>{displayText(change.path, 'unknown file')}</code></summary>
++                {displayText(change.diff) && <pre className="diff-output">{displayText(change.diff)}</pre>}
+               </details>
+             ))}
+           </div>
+@@ -119,7 +119,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
+       <div className="activity-card tool-card">
+         <button className="activity-header" onClick={() => setExpanded(!expanded)}>
+           {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+-          <GitPullRequest size={15} /><span>{item.server ? `${item.server} · ` : ''}{item.tool ?? 'Tool call'}</span>
++          <GitPullRequest size={15} /><span>{displayText(item.server) ? `${displayText(item.server)} · ` : ''}{displayText(item.tool, 'Tool call')}</span>
+           <span className="spacer" /><StatusIcon status={item.status} />
+         </button>
+         {expanded && <div className="activity-body"><pre>{JSON.stringify({ arguments: item.arguments, result: item.result, error: item.error }, null, 2)}</pre></div>}
+@@ -128,10 +128,10 @@ export function CodexItemView({ item }: { item: CodexItem }) {
+   }
+ 
+   if (item.type === 'webSearch') {
+-    return <div className="inline-event"><Search size={14} /><span>{primary}</span></div>;
++    return <div className="inline-event"><Search size={14} /><span>{displayText(primary, 'Web search')}</span></div>;
+   }
+   if (item.type === 'imageView') {
+-    return <div className="inline-event"><Image size={14} /><span>{primary}</span></div>;
++    return <div className="inline-event"><Image size={14} /><span>{displayText(primary, 'Image')}</span></div>;
+   }
+   if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') {
+     return <div className="activity-card review-card"><div className="activity-header"><GitPullRequest size={15} /><span>{item.type === 'enteredReviewMode' ? 'Review started' : 'Review completed'}</span></div>{primary && <div className="activity-body markdown-small"><Markdown>{primary}</Markdown></div>}</div>;
+@@ -144,7 +144,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
+     <div className="activity-card muted-card">
+       <button className="activity-header" onClick={() => setExpanded(!expanded)}>
+         {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+-        <Globe2 size={15} /><span>{item.type}</span>
++        <Globe2 size={15} /><span>{displayText(item.type, 'Unknown item')}</span>
+       </button>
+       {expanded && <div className="activity-body"><pre>{JSON.stringify(item, null, 2)}</pre></div>}
+     </div>
+diff --git a/src/renderer/demo-bridge.ts b/src/renderer/demo-bridge.ts
+index 55f7606..1370073 100644
+--- a/src/renderer/demo-bridge.ts
++++ b/src/renderer/demo-bridge.ts
+@@ -76,6 +76,49 @@ const demoThread = {
+   ],
+ };
+ 
++
++
++const legacyDemoThread = {
++  id: 'thr_demo_legacy',
++  sessionId: 'thr_demo_legacy',
++  name: { type: 'Legacy thread title' },
++  preview: { type: 'Historical Codex thread using structured fields' },
++  cwd: '/srv/legacy-demo',
++  createdAt: now - 90_000,
++  updatedAt: now - 60,
++  recencyAt: now - 60,
++  status: { type: 'idle' },
++  turns: [
++    {
++      id: 'turn_legacy_1',
++      status: { type: 'completed' },
++      items: [
++        {
++          id: 'legacy_user',
++          type: 'userMessage',
++          content: [{ type: 'inputText', text: { type: 'Inspect the historical project format.' } }],
++          status: { type: 'completed' },
++        },
++        {
++          id: 'legacy_agent',
++          type: 'agentMessage',
++          text: { type: 'This old thread now renders without crashing the application.' },
++          status: { type: 'completed' },
++        },
++        {
++          id: 'legacy_command',
++          type: 'commandExecution',
++          command: [{ type: 'npm' }, { type: 'test' }],
++          cwd: { type: '/srv/legacy-demo' },
++          aggregatedOutput: { type: 'Legacy command output' },
++          status: { type: 'completed' },
++          exitCode: 0,
++        },
++      ],
++    },
++  ],
++};
++
+ const demoThreads = [
+   demoThread,
+   {
+@@ -101,8 +144,11 @@ const demoThreads = [
+ ];
+ 
+ export function installDemoBridge(): void {
+-  if (!new URLSearchParams(window.location.search).has('demo') || window.codexBridge) return;
++  const search = new URLSearchParams(window.location.search);
++  if (!search.has('demo') || window.codexBridge) return;
+ 
++  const legacyMode = search.get('demo') === 'legacy';
++  const visibleThreads = legacyMode ? [legacyDemoThread, ...demoThreads] : demoThreads;
+   (window as any).__CODEXHARBOR_DEMO__ = true;
+   let status: ConnectionStatus = { state: 'connected', hostId: demoHost.id, message: 'Connected to demo host', platform: 'linux' };
+   const statusListeners = new Set<(value: ConnectionStatus) => void>();
+@@ -134,8 +180,11 @@ export function installDemoBridge(): void {
+         }
+         if (method === 'account/read') return { account: { type: 'chatgpt', email: 'dev@example.com', planType: 'pro' }, requiresOpenaiAuth: false } as T;
+         if (method === 'account/rateLimits/read') return { rateLimits: { primary: { usedPercent: 18, windowDurationMins: 300, resetsAt: now + 9200 } } } as T;
+-        if (method === 'thread/list') return { data: demoThreads } as T;
+-        if (method === 'thread/read' || method === 'thread/resume') return { thread: params?.threadId === demoThread.id ? demoThread : demoThreads[1] } as T;
++        if (method === 'thread/list') return { data: visibleThreads } as T;
++        if (method === 'thread/read' || method === 'thread/resume') {
++          const match = visibleThreads.find((thread) => thread.id === params?.threadId) ?? visibleThreads[0];
++          return { thread: match } as T;
++        }
+         if (method === 'thread/start') return { thread: { ...demoThread, id: 'thr_new', name: null, turns: [] } } as T;
+         if (method === 'turn/start') return { turn: { id: 'turn_new', status: 'inProgress', items: [] } } as T;
+         return {} as T;
+diff --git a/src/renderer/lib/codex.ts b/src/renderer/lib/codex.ts
+index f39c994..51c6535 100644
+--- a/src/renderer/lib/codex.ts
++++ b/src/renderer/lib/codex.ts
+@@ -26,28 +26,28 @@ export interface CodexItem {
+   id: string;
+   type: string;
+   status?: string;
+-  text?: string;
++  text?: unknown;
+   phase?: string;
+-  content?: any;
+-  summary?: any;
+-  command?: string | string[];
+-  cwd?: string;
+-  commandActions?: any[];
+-  aggregatedOutput?: string;
+-  output?: string;
+-  streamedOutput?: string;
++  content?: unknown;
++  summary?: unknown;
++  command?: unknown;
++  cwd?: unknown;
++  commandActions?: unknown[];
++  aggregatedOutput?: unknown;
++  output?: unknown;
++  streamedOutput?: unknown;
+   exitCode?: number | null;
+   durationMs?: number;
+-  changes?: Array<{ path?: string; kind?: string; diff?: string }>;
+-  server?: string;
+-  tool?: string;
+-  arguments?: any;
+-  result?: any;
+-  error?: any;
+-  query?: string;
++  changes?: Array<{ path?: unknown; kind?: unknown; diff?: unknown }>;
++  server?: unknown;
++  tool?: unknown;
++  arguments?: unknown;
++  result?: unknown;
++  error?: unknown;
++  query?: unknown;
+   action?: any;
+-  path?: string;
+-  review?: string;
++  path?: unknown;
++  review?: unknown;
+   turnId?: string;
+   [key: string]: any;
+ }
+@@ -65,68 +65,160 @@ export interface PendingRequest {
+   params: any;
+ }
+ 
+-export function textFromContent(content: any): string {
++/**
++ * Convert App Server values from both current and historical schemas into
++ * render-safe text. JSON-RPC data is untrusted at the UI boundary: older
++ * threads can contain structured objects where newer releases return strings.
++ */
++export function displayText(value: unknown, fallback = ''): string {
++  if (value === null || value === undefined) return fallback;
++  if (typeof value === 'string') return value;
++  if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') return String(value);
++
++  if (Array.isArray(value)) {
++    const parts = value.map((entry) => displayText(entry)).filter(Boolean);
++    return parts.length ? parts.join('\n') : fallback;
++  }
++
++  if (typeof value === 'object') {
++    const record = value as Record<string, unknown>;
++    for (const key of ['text', 'content', 'message', 'value', 'label', 'name', 'path', 'query', 'review']) {
++      if (record[key] !== undefined) {
++        const nested = displayText(record[key]);
++        if (nested) return nested;
++      }
++    }
++
++    // Historical protocol variants occasionally use tagged objects with only
++    // a `type` field. Returning the tag is less pretty than losing the window.
++    if (typeof record.type === 'string') return record.type;
++
++    try {
++      return JSON.stringify(value);
++    } catch {
++      return fallback;
++    }
++  }
++
++  return fallback;
++}
++
++export function textFromContent(content: unknown): string {
+   if (typeof content === 'string') return content;
+   if (!content) return '';
+   if (Array.isArray(content)) {
+     return content
+       .map((part) => {
+         if (typeof part === 'string') return part;
+-        if (part?.type === 'text' || part?.type === 'inputText' || part?.type === 'output_text') return part.text ?? '';
+-        if (part?.type === 'image' || part?.type === 'localImage') return `[Image: ${part.path ?? part.url ?? 'attached'}]`;
+-        return part?.text ?? '';
++        if (!part || typeof part !== 'object') return displayText(part);
++        const record = part as Record<string, unknown>;
++        const partType = displayText(record.type);
++        if (partType === 'image' || partType === 'localImage' || partType === 'inputImage') {
++          return `[Image: ${displayText(record.path ?? record.url, 'attached')}]`;
++        }
++        return displayText(record.text ?? record.content ?? record.value);
+       })
+       .filter(Boolean)
+       .join('\n');
+   }
+-  return content.text ?? '';
++  return displayText(content);
+ }
+ 
+-export function commandText(command: string | string[] | undefined): string {
+-  if (Array.isArray(command)) return command.join(' ');
+-  return command ?? '';
++export function commandText(command: unknown): string {
++  if (Array.isArray(command)) return command.map((part) => displayText(part)).filter(Boolean).join(' ');
++  return displayText(command);
+ }
+ 
+ export function itemPrimaryText(item: CodexItem): string {
+   switch (item.type) {
+     case 'userMessage':
+-      return textFromContent(item.content);
++      return textFromContent(item.content ?? item.text);
+     case 'agentMessage':
+     case 'plan':
+-      return item.text ?? '';
++      return textFromContent(item.text ?? item.content);
+     case 'reasoning':
+-      return textFromContent(item.summary) || textFromContent(item.content);
++      return textFromContent(item.summary) || textFromContent(item.content) || textFromContent(item.text);
+     case 'commandExecution':
+       return commandText(item.command);
+     case 'fileChange':
+-      return (item.changes ?? []).map((change) => `${change.kind ?? 'edit'} ${change.path ?? ''}`).join('\n');
++      return (item.changes ?? []).map((change) => `${displayText(change.kind, 'edit')} ${displayText(change.path)}`.trim()).join('\n');
+     case 'mcpToolCall':
+-      return `${item.server ?? 'MCP'} · ${item.tool ?? 'tool'}`;
++      return `${displayText(item.server, 'MCP')} · ${displayText(item.tool, 'tool')}`;
+     case 'dynamicToolCall':
+     case 'collabToolCall':
+-      return item.tool ?? item.type;
++      return displayText(item.tool, item.type);
+     case 'webSearch':
+-      return item.query ?? item.action?.query ?? 'Web search';
++      return displayText(item.query ?? item.action?.query, 'Web search');
+     case 'imageView':
+-      return item.path ?? 'Image';
++      return displayText(item.path, 'Image');
+     case 'enteredReviewMode':
+-      return item.review ?? 'Review started';
++      return displayText(item.review, 'Review started');
+     case 'exitedReviewMode':
+-      return item.review ?? 'Review completed';
++      return displayText(item.review, 'Review completed');
+     case 'contextCompaction':
+       return 'Context compacted';
+     default:
+-      return item.text ?? item.review ?? '';
++      return textFromContent(item.text ?? item.content ?? item.review);
+   }
+ }
+ 
++export function normalizeStatus(value: unknown): string | undefined {
++  if (typeof value === 'string') return value;
++  if (value && typeof value === 'object') {
++    const type = displayText((value as Record<string, unknown>).type);
++    return type || undefined;
++  }
++  return undefined;
++}
++
++export function normalizeCodexItem(value: unknown, fallbackId = 'item'): CodexItem {
++  const raw = value && typeof value === 'object' ? value as Record<string, any> : {};
++  return {
++    ...raw,
++    id: displayText(raw.id, fallbackId),
++    type: displayText(raw.type, 'unknown'),
++    status: normalizeStatus(raw.status),
++    turnId: displayText(raw.turnId) || undefined,
++  } as CodexItem;
++}
++
++export function normalizeThread(value: unknown, fallbackId = 'thread'): ThreadSummary {
++  const raw = value && typeof value === 'object' ? value as Record<string, any> : {};
++  const turns = Array.isArray(raw.turns)
++    ? raw.turns.map((turn: any, turnIndex: number) => {
++        const turnRecord = turn && typeof turn === 'object' ? turn : {};
++        const turnId = displayText(turnRecord.id, `${fallbackId}-turn-${turnIndex}`);
++        return {
++          ...turnRecord,
++          id: turnId,
++          status: normalizeStatus(turnRecord.status),
++          items: Array.isArray(turnRecord.items)
++            ? turnRecord.items.map((item: unknown, itemIndex: number) => normalizeCodexItem(item, `${turnId}-item-${itemIndex}`))
++            : [],
++        };
++      })
++    : undefined;
++
++  return {
++    ...raw,
++    id: displayText(raw.id ?? raw.threadId ?? raw.sessionId, fallbackId),
++    sessionId: displayText(raw.sessionId) || undefined,
++    name: displayText(raw.name) || null,
++    preview: displayText(raw.preview) || undefined,
++    cwd: displayText(raw.cwd) || undefined,
++    modelProvider: displayText(raw.modelProvider) || undefined,
++    status: normalizeStatus(raw.status),
++    turns,
++  } as ThreadSummary;
++}
++
+ export function flattenTurns(thread: ThreadSummary | undefined): CodexItem[] {
+   if (!thread?.turns) return [];
+-  return thread.turns.flatMap((turn) => (turn.items ?? []).map((item) => ({ ...item, turnId: turn.id })));
++  return thread.turns.flatMap((turn, turnIndex) => (turn.items ?? []).map((item, itemIndex) => normalizeCodexItem({ ...item, turnId: turn.id }, `${thread.id}-turn-${turnIndex}-item-${itemIndex}`)));
+ }
+ 
+ export function formatRelativeTime(epochSeconds?: number): string {
+-  if (!epochSeconds) return '';
++  if (!epochSeconds || typeof epochSeconds !== 'number') return '';
+   const ms = epochSeconds > 10_000_000_000 ? epochSeconds : epochSeconds * 1000;
+   const delta = Date.now() - ms;
+   const minutes = Math.floor(delta / 60_000);
+@@ -140,7 +232,5 @@ export function formatRelativeTime(epochSeconds?: number): string {
+ }
+ 
+ export function statusLabel(status: ThreadSummary['status']): string {
+-  if (!status) return 'idle';
+-  if (typeof status === 'string') return status;
+-  return status.type ?? 'idle';
++  return normalizeStatus(status) ?? 'idle';
+ }
+diff --git a/src/renderer/main.tsx b/src/renderer/main.tsx
+index f58ef57..c516ae0 100644
+--- a/src/renderer/main.tsx
++++ b/src/renderer/main.tsx
+@@ -4,12 +4,15 @@ import '@fontsource-variable/inter/index.css';
+ import '@fontsource/jetbrains-mono/400.css';
+ import './styles.css';
+ import App from './App';
++import { AppErrorBoundary } from './components/AppErrorBoundary';
+ import { installDemoBridge } from './demo-bridge';
+ 
+ installDemoBridge();
+ 
+ ReactDOM.createRoot(document.getElementById('root')!).render(
+   <React.StrictMode>
+-    <App />
++    <AppErrorBoundary>
++      <App />
++    </AppErrorBoundary>
+   </React.StrictMode>,
+ );
+diff --git a/src/renderer/styles.css b/src/renderer/styles.css
+index 610e3df..f145678 100644
+--- a/src/renderer/styles.css
++++ b/src/renderer/styles.css
+@@ -374,3 +374,37 @@ kbd { border: 1px solid var(--line-strong); border-bottom-color: rgba(255,255,25
+ .schema-details summary { cursor: pointer; user-select: none; }
+ .structured-input { width: 100%; border: 1px solid rgba(248,195,94,.15); border-radius: 8px; color: var(--text); background: rgba(0,0,0,.24); padding: 9px 10px; resize: vertical; outline: 0; font-family: 'JetBrains Mono', monospace; font-size: 8.5px; line-height: 1.5; }
+ .structured-input:focus { border-color: rgba(248,195,94,.32); }
++
++.fatal-render-error {
++  min-height: 100vh;
++  display: grid;
++  place-content: center;
++  justify-items: start;
++  gap: 14px;
++  padding: 48px;
++  background: radial-gradient(circle at 40% 20%, rgba(54, 211, 153, 0.09), transparent 34%), #080b0d;
++  color: var(--text-primary);
++}
++
++.fatal-render-error h1,
++.fatal-render-error p {
++  max-width: 720px;
++  margin: 0;
++}
++
++.fatal-render-error p {
++  color: var(--text-secondary);
++  line-height: 1.65;
++}
++
++.fatal-render-error pre {
++  width: min(720px, calc(100vw - 96px));
++  max-height: 220px;
++  overflow: auto;
++  padding: 16px;
++  border: 1px solid var(--border-strong);
++  border-radius: 12px;
++  background: rgba(0, 0, 0, 0.32);
++  white-space: pre-wrap;
++  word-break: break-word;
++}

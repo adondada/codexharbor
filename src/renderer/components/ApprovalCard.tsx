@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Check, CheckCheck, ExternalLink, FilePenLine, ShieldAlert, TerminalSquare, X } from 'lucide-react';
 import type { PendingRequest } from '../lib/codex';
-import { commandText } from '../lib/codex';
+import { commandText, displayText } from '../lib/codex';
 
 interface ApprovalCardProps {
   request: PendingRequest;
@@ -86,15 +86,15 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
     const network = params.networkApprovalContext;
     return (
       <>
-        {params.reason && <p className="approval-reason">{params.reason}</p>}
+        {displayText(params.reason) && <p className="approval-reason">{displayText(params.reason)}</p>}
         {network ? (
           <div className="approval-command">
-            <span className="mono">{network.protocol ?? 'network'}://{network.host ?? 'unknown host'}{network.port ? `:${network.port}` : ''}</span>
+            <span className="mono">{displayText(network.protocol, 'network')}://{displayText(network.host, 'unknown host')}{network.port ? `:${displayText(network.port)}` : ''}</span>
           </div>
         ) : (
           <div className="approval-command">
             <code>{commandText(params.command)}</code>
-            {params.cwd && <span>{params.cwd}</span>}
+            {displayText(params.cwd) && <span>{displayText(params.cwd)}</span>}
           </div>
         )}
         <div className="approval-actions">
@@ -109,8 +109,8 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
 
   const renderFile = () => (
     <>
-      {params.reason && <p className="approval-reason">{params.reason}</p>}
-      {params.grantRoot && <div className="approval-command"><span>Requested write root</span><code>{params.grantRoot}</code></div>}
+      {displayText(params.reason) && <p className="approval-reason">{displayText(params.reason)}</p>}
+      {displayText(params.grantRoot) && <div className="approval-command"><span>Requested write root</span><code>{displayText(params.grantRoot)}</code></div>}
       <div className="approval-actions">
         {decisionButton('decline', 'Decline', 'danger-ghost')}
         {decisionButton('cancel', 'Cancel turn', 'danger-ghost')}
@@ -128,8 +128,8 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
           const options = Array.isArray(question.options) ? question.options : [];
           return (
             <div className="question" key={id}>
-              {question.header && <span className="question-header">{question.header}</span>}
-              <strong>{question.question ?? question.prompt ?? `Question ${index + 1}`}</strong>
+              {displayText(question.header) && <span className="question-header">{displayText(question.header)}</span>}
+              <strong>{displayText(question.question ?? question.prompt, `Question ${index + 1}`)}</strong>
               {options.length > 0 ? (
                 <div className="question-options">
                   {options.map((option: any) => {
@@ -137,7 +137,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
                     return (
                       <label key={label} className={answers[id] === label ? 'selected' : ''}>
                         <input type="radio" name={`q-${id}`} checked={answers[id] === label} onChange={() => setAnswers((current) => ({ ...current, [id]: label }))} />
-                        <span><b>{label}</b>{option.description && <small>{option.description}</small>}</span>
+                        <span><b>{label}</b>{displayText(option.description) && <small>{displayText(option.description)}</small>}</span>
                       </label>
                     );
                   })}
@@ -168,7 +168,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
 
   const renderPermissions = () => (
     <>
-      {params.reason && <p className="approval-reason">{params.reason}</p>}
+      {displayText(params.reason) && <p className="approval-reason">{displayText(params.reason)}</p>}
       <pre className="json-preview">{JSON.stringify(params.permissions ?? {}, null, 2)}</pre>
       <div className="approval-actions">
         <button disabled={busy} className="danger-ghost" onClick={() => resolve({ permissions: {} })}><X size={15} /> Deny</button>
@@ -192,7 +192,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
     if (params.mode === 'url' && params.url) {
       return (
         <>
-          <p className="approval-reason">{params.message ?? 'Open the connector authorization page.'}</p>
+          <p className="approval-reason">{displayText(params.message, 'Open the connector authorization page.')}</p>
           <button className="secondary-button" onClick={() => window.codexBridge.system.openExternal(params.url)}><ExternalLink size={15} /> Open page</button>
           <div className="approval-actions">
             <button disabled={busy} className="danger-ghost" onClick={() => resolve({ action: 'decline', content: null })}>Decline</button>
@@ -203,7 +203,7 @@ export function ApprovalCard({ request, onResolve, onReject }: ApprovalCardProps
     }
     return (
       <>
-        <p className="approval-reason">{params.message ?? 'The connector is requesting structured input.'}</p>
+        <p className="approval-reason">{displayText(params.message, 'The connector is requesting structured input.')}</p>
         <details className="schema-details">
           <summary>Requested JSON schema</summary>
           <pre className="json-preview">{JSON.stringify(params.requestedSchema ?? {}, null, 2)}</pre>

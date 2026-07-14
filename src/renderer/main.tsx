@@ -4,12 +4,15 @@ import '@fontsource-variable/inter/index.css';
 import '@fontsource/jetbrains-mono/400.css';
 import './styles.css';
 import App from './App';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { installDemoBridge } from './demo-bridge';
 
 installDemoBridge();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </React.StrictMode>,
 );

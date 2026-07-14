@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Bot, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleEllipsis, FileDiff, GitPullRequest, Globe2, Image, Search, TerminalSquare, UserRound, XCircle } from 'lucide-react';
 import type { CodexItem } from '../lib/codex';
-import { commandText, itemPrimaryText } from '../lib/codex';
+import { commandText, displayText, itemPrimaryText } from '../lib/codex';
 
 function StatusIcon({ status }: { status?: string }) {
   if (status === 'failed' || status === 'declined') return <XCircle size={14} />;
@@ -71,7 +71,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
   }
 
   if (item.type === 'commandExecution') {
-    const output = item.aggregatedOutput ?? item.streamedOutput ?? item.output ?? '';
+    const output = displayText(item.aggregatedOutput ?? item.streamedOutput ?? item.output);
     return (
       <div className={`activity-card command-card status-${item.status ?? 'running'}`}>
         <button className="activity-header" onClick={() => setExpanded(!expanded)}>
@@ -84,7 +84,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
         </button>
         {expanded && (
           <div className="activity-body">
-            {item.cwd && <div className="cwd-line">in {item.cwd}</div>}
+            {displayText(item.cwd) && <div className="cwd-line">in {displayText(item.cwd)}</div>}
             <pre>{output || (item.status === 'inProgress' ? 'Running…' : 'No output')}</pre>
           </div>
         )}
@@ -104,8 +104,8 @@ export function CodexItemView({ item }: { item: CodexItem }) {
           <div className="activity-body change-list">
             {(item.changes ?? []).map((change, index) => (
               <details key={`${change.path}-${index}`} open={item.changes?.length === 1}>
-                <summary><span className={`change-kind ${change.kind ?? 'edit'}`}>{change.kind ?? 'edit'}</span><code>{change.path ?? 'unknown file'}</code></summary>
-                {change.diff && <pre className="diff-output">{change.diff}</pre>}
+                <summary><span className={`change-kind ${displayText(change.kind, 'edit')}`}>{displayText(change.kind, 'edit')}</span><code>{displayText(change.path, 'unknown file')}</code></summary>
+                {displayText(change.diff) && <pre className="diff-output">{displayText(change.diff)}</pre>}
               </details>
             ))}
           </div>
@@ -119,7 +119,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
       <div className="activity-card tool-card">
         <button className="activity-header" onClick={() => setExpanded(!expanded)}>
           {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-          <GitPullRequest size={15} /><span>{item.server ? `${item.server} · ` : ''}{item.tool ?? 'Tool call'}</span>
+          <GitPullRequest size={15} /><span>{displayText(item.server) ? `${displayText(item.server)} · ` : ''}{displayText(item.tool, 'Tool call')}</span>
           <span className="spacer" /><StatusIcon status={item.status} />
         </button>
         {expanded && <div className="activity-body"><pre>{JSON.stringify({ arguments: item.arguments, result: item.result, error: item.error }, null, 2)}</pre></div>}
@@ -128,10 +128,10 @@ export function CodexItemView({ item }: { item: CodexItem }) {
   }
 
   if (item.type === 'webSearch') {
-    return <div className="inline-event"><Search size={14} /><span>{primary}</span></div>;
+    return <div className="inline-event"><Search size={14} /><span>{displayText(primary, 'Web search')}</span></div>;
   }
   if (item.type === 'imageView') {
-    return <div className="inline-event"><Image size={14} /><span>{primary}</span></div>;
+    return <div className="inline-event"><Image size={14} /><span>{displayText(primary, 'Image')}</span></div>;
   }
   if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') {
     return <div className="activity-card review-card"><div className="activity-header"><GitPullRequest size={15} /><span>{item.type === 'enteredReviewMode' ? 'Review started' : 'Review completed'}</span></div>{primary && <div className="activity-body markdown-small"><Markdown>{primary}</Markdown></div>}</div>;
@@ -144,7 +144,7 @@ export function CodexItemView({ item }: { item: CodexItem }) {
     <div className="activity-card muted-card">
       <button className="activity-header" onClick={() => setExpanded(!expanded)}>
         {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-        <Globe2 size={15} /><span>{item.type}</span>
+        <Globe2 size={15} /><span>{displayText(item.type, 'Unknown item')}</span>
       </button>
       {expanded && <div className="activity-body"><pre>{JSON.stringify(item, null, 2)}</pre></div>}
     </div>
