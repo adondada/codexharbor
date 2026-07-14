@@ -7,6 +7,7 @@
     <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8ff0bc" /></a>
     <img alt="Electron" src="https://img.shields.io/badge/Electron-React-9bb7ff" />
   </p>
+  <p><a href="https://www.producthunt.com/products/codexharbor?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-codexharbor" target="_blank" rel="noopener noreferrer"><img alt="CodexHarbor - Control Codex on a VPS through direct SSH | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1195741&amp;theme=light&amp;t=1784060638075"></a></p>
   <p>Download the latest Windows installer, portable EXE, AppImage or Debian package from GitHub
 Releases.</p>
 <p>Latest release: https://github.com/adondada/codexharbor/releases/latest</p>
